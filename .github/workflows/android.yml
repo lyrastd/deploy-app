@@ -81,6 +81,54 @@ jobs:
             fi
           fi
 
+      - name: Auto-Generate Missing Keystores
+        run: |
+          echo "Scanning for referenced keystores/JKS files..."
+          grep -rnE ".keystore|.jks" . --exclude-dir=node_modules || true
+          
+          # Generate fallback debug.keystore at typical locations
+          if [ ! -f debug.keystore ]; then
+            echo "Generating fallback debug.keystore at workspace root..."
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
+          fi
+          
+          if [ -d app ] && [ ! -f app/debug.keystore ]; then
+            echo "Generating fallback debug.keystore in app/..."
+            keytool -genkey -v -keystore app/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
+          fi
+
+          # Search for custom paths in build.gradle files and generate them
+          find . -name "build.gradle*" | while read -r gradle_file; do
+            dir=$(dirname "$gradle_file")
+            grep -ioE "storeFile\s*=?\s*file\(["'][^"']+"" "$gradle_file" | sed -E 's/.*file\(["']([^"']+)["']/\1/' | while read -r keystore_path; do
+              full_path="$dir/$keystore_path"
+              if [[ "$keystore_path" == /* ]]; then
+                full_path="$keystore_path"
+              elif [[ "$keystore_path" == *rootProject* ]] || [[ "$keystore_path" == *rootDir* ]]; then
+                clean_name=$(basename "$keystore_path")
+                full_path="$GITHUB_WORKSPACE/$clean_name"
+              fi
+              
+              if [ ! -f "$full_path" ]; then
+                echo "Required keystore path matches referenced config: $full_path. Generating debug-grade keystore..."
+                mkdir -p "$(dirname "$full_path")"
+                
+                # Fetch configured passwords if customized, fallback to 'android'
+                p_store=$(grep -i "storePassword" "$gradle_file" | head -n 1 | sed -E 's/.*["''']([^"''']+)["'''].*/\1/' || echo "android")
+                if [ -z "$p_store" ] || [[ "$p_store" == *storePassword* ]]; then p_store="android"; fi
+                
+                alias_name=$(grep -i "keyAlias" "$gradle_file" | head -n 1 | sed -E 's/.*["''']([^"''']+)["'''].*/\1/' || echo "androiddebugkey")
+                if [ -z "$alias_name" ] || [[ "$alias_name" == *keyAlias* ]]; then alias_name="androiddebugkey"; fi
+                
+                p_key=$(grep -i "keyPassword" "$gradle_file" | head -n 1 | sed -E 's/.*["''']([^"''']+)["'''].*/\1/' || echo "android")
+                if [ -z "$p_key" ] || [[ "$p_key" == *keyPassword* ]]; then p_key="android"; fi
+                
+                echo "Generating keystore with: file='$full_path', alias='$alias_name'"
+                keytool -genkey -v -keystore "$full_path" -storepass "$p_store" -alias "$alias_name" -keypass "$p_key" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
+              fi
+            done
+          done
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
