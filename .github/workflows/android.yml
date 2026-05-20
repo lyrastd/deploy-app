@@ -1,0 +1,99 @@
+name: Android Build Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build Type (debug or release)'
+        required: true
+        default: 'debug'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Unzip Android Project
+        run: |
+          mkdir -p extracted_project
+          unzip -q project.zip -d extracted_project
+          
+          # Smart detection to adjust nested ZIP directories and lift elements
+          cd extracted_project
+          if [ -f gradlew ]; then
+            echo "Project found at root of zip file."
+            mv * .. 2>/dev/null || true
+            mv .g* .. 2>/dev/null || true
+          else
+            # Try to identify nested directory containing gradlew or build.gradle
+            NESTED_DIR=$(find . -maxdepth 2 -name "gradlew" | head -n 1)
+            if [ -n "$NESTED_DIR" ]; then
+              ACTUAL_DIR=$(dirname "$NESTED_DIR")
+              echo "Project located in nested folder: $ACTUAL_DIR"
+              cd "$ACTUAL_DIR"
+              mv * ../.. 2>/dev/null || true
+              mv .g* ../.. 2>/dev/null || true
+              cd ../..
+            else
+              # Fallback: look for build.gradle
+              BUILD_GRADLE=$(find . -maxdepth 2 -name "build.gradle*" | head -n 1)
+              if [ -n "$BUILD_GRADLE" ]; then
+                ACTUAL_DIR=$(dirname "$BUILD_GRADLE")
+                echo "Found build.gradle in nested folder: $ACTUAL_DIR"
+                cd "$ACTUAL_DIR"
+                mv * ../.. 2>/dev/null || true
+                mv .g* ../.. 2>/dev/null || true
+                cd ../..
+              else
+                echo "Standard Android elements not found at root, moving all root directory children to root."
+                FIRST_SUBDIR=$(find . -maxdepth 1 -type d ! -name "." | head -n 1)
+                if [ -n "$FIRST_SUBDIR" ]; then
+                  cd "$FIRST_SUBDIR"
+                  mv * ../.. 2>/dev/null || true
+                  mv .g* ../.. 2>/dev/null || true
+                fi
+              fi
+            fi
+          fi
+          cd ..
+          rm -rf extracted_project project.zip
+          
+          # Clean execution permissions
+          chmod +x gradlew || true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Build with Gradle
+        env:
+          BUILD_TYPE: ${{ github.event.inputs.build_type }}
+        run: |
+          # Decide which task to run
+          if [ "$BUILD_TYPE" = "release" ]; then
+            ./gradlew assembleRelease
+          else
+            ./gradlew assembleDebug
+          fi
+
+      - name: Locate and Sign Build Artifacts
+        run: |
+          echo "Listing all generated .apk outputs:"
+          find . -name "*.apk" || echo "No .apk found yet"
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-apk
+          path: |
+            **/build/outputs/apk/**/*.apk
+            **/build/outputs/bundle/**/*.aab
+          if-no-files-found: error
