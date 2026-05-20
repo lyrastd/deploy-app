@@ -20,6 +20,11 @@ jobs:
 
       - name: Unzip Android Project
         run: |
+          # 1. Clean up old workspace files to prevent directory nesting bugs with 'mv' on subsequent runs
+          # We preserve the workflow directory (.github) and the source project ZIP (project.zip)
+          find . -maxdepth 1 ! -name '.' ! -name '.github' ! -name 'project.zip' -exec rm -rf {} + || true
+
+          # 2. Extract the fresh ZIP module content
           mkdir -p extracted_project
           unzip -q project.zip -d extracted_project
           
@@ -28,48 +33,53 @@ jobs:
           if [ -f gradlew ]; then
             echo "Project found at root of zip file."
             shopt -s dotglob
-            mv * .. 2>/dev/null || true
+            mv * "$GITHUB_WORKSPACE" 2>/dev/null || true
             shopt -u dotglob
           else
-            # Try to identify nested directory containing gradlew or build.gradle
-            NESTED_DIR=$(find . -maxdepth 2 -name "gradlew" | head -n 1)
+            # Try to identify nested directory containing gradlew or build.gradle at any depth
+            NESTED_DIR=$(find . -name "gradlew" -not -path "*/.*" | head -n 1)
             if [ -n "$NESTED_DIR" ]; then
               ACTUAL_DIR=$(dirname "$NESTED_DIR")
               echo "Project located in nested folder: $ACTUAL_DIR"
               cd "$ACTUAL_DIR"
               shopt -s dotglob
-              mv * ../.. 2>/dev/null || true
+              mv * "$GITHUB_WORKSPACE" 2>/dev/null || true
               shopt -u dotglob
-              cd ../..
             else
-              # Fallback: look for build.gradle
-              BUILD_GRADLE=$(find . -maxdepth 2 -name "build.gradle*" | head -n 1)
+              # Fallback: look for build.gradle at any depth
+              BUILD_GRADLE=$(find . -name "build.gradle*" -not -path "*/.*" | head -n 1)
               if [ -n "$BUILD_GRADLE" ]; then
                 ACTUAL_DIR=$(dirname "$BUILD_GRADLE")
                 echo "Found build.gradle in nested folder: $ACTUAL_DIR"
                 cd "$ACTUAL_DIR"
                 shopt -s dotglob
-                mv * ../.. 2>/dev/null || true
+                mv * "$GITHUB_WORKSPACE" 2>/dev/null || true
                 shopt -u dotglob
-                cd ../..
               else
                 echo "Standard Android elements not found at root, moving all root directory children to root."
                 FIRST_SUBDIR=$(find . -maxdepth 1 -type d ! -name "." | head -n 1)
                 if [ -n "$FIRST_SUBDIR" ]; then
                   cd "$FIRST_SUBDIR"
                   shopt -s dotglob
-                  mv * ../.. 2>/dev/null || true
+                  mv * "$GITHUB_WORKSPACE" 2>/dev/null || true
                   shopt -u dotglob
-                  cd ../..
                 fi
               fi
             fi
           fi
-          cd ..
+          cd "$GITHUB_WORKSPACE"
           rm -rf extracted_project project.zip
           
-          # Clean execution permissions
-          chmod +x gradlew || true
+          # Clean execution permissions / generate wrapper if missing
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+          else
+            echo "gradlew not found at workspace root. Generating standard Gradle Wrapper..."
+            gradle wrapper || echo "Warn: Could not generate custom wrapper; fallback to system gradle."
+            if [ -f gradlew ]; then
+              chmod +x gradlew
+            fi
+          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -81,11 +91,18 @@ jobs:
         env:
           BUILD_TYPE: ${{ github.event.inputs.build_type }}
         run: |
-          # Decide which task to run
-          if [ "$BUILD_TYPE" = "release" ]; then
-            ./gradlew assembleRelease
+          # Decide which task / wrapper tool to run
+          if [ -f ./gradlew ]; then
+            GRADLE_CMD="./gradlew"
           else
-            ./gradlew assembleDebug
+            echo "gradlew still missing at root. Falling back to the runner's system gradle."
+            GRADLE_CMD="gradle"
+          fi
+
+          if [ "$BUILD_TYPE" = "release" ]; then
+            $GRADLE_CMD assembleRelease
+          else
+            $GRADLE_CMD assembleDebug
           fi
 
       - name: Locate and Sign Build Artifacts
