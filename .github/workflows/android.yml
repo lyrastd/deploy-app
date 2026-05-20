@@ -27,8 +27,7 @@ jobs:
           cd extracted_project
           if [ -f gradlew ]; then
             echo "Project found at root of zip file."
-            mv * .. 2>/dev/null || true
-            mv .g* .. 2>/dev/null || true
+            find . -maxdepth 1 -mindepth 1 -exec mv {} .. ;
           else
             # Try to identify nested directory containing gradlew or build.gradle
             NESTED_DIR=$(find . -maxdepth 2 -name "gradlew" | head -n 1)
@@ -36,8 +35,7 @@ jobs:
               ACTUAL_DIR=$(dirname "$NESTED_DIR")
               echo "Project located in nested folder: $ACTUAL_DIR"
               cd "$ACTUAL_DIR"
-              mv * ../.. 2>/dev/null || true
-              mv .g* ../.. 2>/dev/null || true
+              find . -maxdepth 1 -mindepth 1 -exec mv {} ../.. ;
               cd ../..
             else
               # Fallback: look for build.gradle
@@ -46,16 +44,15 @@ jobs:
                 ACTUAL_DIR=$(dirname "$BUILD_GRADLE")
                 echo "Found build.gradle in nested folder: $ACTUAL_DIR"
                 cd "$ACTUAL_DIR"
-                mv * ../.. 2>/dev/null || true
-                mv .g* ../.. 2>/dev/null || true
+                find . -maxdepth 1 -mindepth 1 -exec mv {} ../.. ;
                 cd ../..
               else
                 echo "Standard Android elements not found at root, moving all root directory children to root."
                 FIRST_SUBDIR=$(find . -maxdepth 1 -type d ! -name "." | head -n 1)
                 if [ -n "$FIRST_SUBDIR" ]; then
                   cd "$FIRST_SUBDIR"
-                  mv * ../.. 2>/dev/null || true
-                  mv .g* ../.. 2>/dev/null || true
+                  find . -maxdepth 1 -mindepth 1 -exec mv {} ../.. ;
+                  cd ../..
                 fi
               fi
             fi
@@ -71,7 +68,6 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
-          cache: 'gradle'
 
       - name: Build with Gradle
         env:
